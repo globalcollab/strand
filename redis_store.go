@@ -13,6 +13,30 @@ import (
 )
 
 const (
+	luaLoadNextScript = `
+local machine_key = KEYS[1]
+local prefix = ARGV[1]
+local machine_id = ARGV[2]
+
+local machine_vals = redis.call('HMGET', machine_key, 'state', 'version', 'last_applied_sequence')
+local state = machine_vals[1] or ""
+local version = machine_vals[2] or "0"
+local last_seq = tonumber(machine_vals[3] or "0")
+
+local next_seq = last_seq + 1
+local cmd_key = prefix .. ":cmd:" .. machine_id .. ":" .. tostring(next_seq)
+
+local cmd_vals = redis.call('HMGET', cmd_key, 'data', 'status')
+local cmd_data = cmd_vals[1]
+local cmd_status = cmd_vals[2]
+
+if not cmd_data or cmd_status ~= "pending" then
+    return nil
+end
+
+return {state, version, tostring(last_seq), cmd_data}
+`
+
 	luaCommitScript = `
 local machine_key = KEYS[1]
 local cmd_hash_key = KEYS[2]
@@ -238,19 +262,28 @@ func (r *RedisStore[S]) GetSnapshot(ctx context.Context, machineID string) (Snap
 
 func (r *RedisStore[S]) LoadNext(ctx context.Context, machineID string) (Snapshot[S], Command, error) {
 	mKey := r.machineKey(machineID)
-	vals, err := r.client.HMGet(ctx, mKey, "state", "version", "last_applied_sequence").Result()
-	if err != nil && !errors.Is(err, redis.Nil) {
+	res, err := r.client.Eval(ctx, luaLoadNextScript, []string{mKey}, r.prefix, machineID).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return Snapshot[S]{}, Command{}, ErrNoPendingCommand
+		}
 		return Snapshot[S]{}, Command{}, err
 	}
 
-	var state S
-	var version, lastSeq uint64
+	arr, ok := res.([]interface{})
+	if !ok || len(arr) < 4 {
+		return Snapshot[S]{}, Command{}, ErrNoPendingCommand
+	}
 
-	if vals[0] != nil {
-		if stateStr, ok := vals[0].(string); ok && stateStr != "" {
-			if err := json.Unmarshal([]byte(stateStr), &state); err != nil {
-				return Snapshot[S]{}, Command{}, fmt.Errorf("strand: failed to unmarshal state: %w", err)
-			}
+	stateStr, _ := arr[0].(string)
+	verStr, _ := arr[1].(string)
+	lastSeqStr, _ := arr[2].(string)
+	cmdDataStr, _ := arr[3].(string)
+
+	var state S
+	if stateStr != "" {
+		if err := json.Unmarshal([]byte(stateStr), &state); err != nil {
+			return Snapshot[S]{}, Command{}, fmt.Errorf("strand: failed to unmarshal state: %w", err)
 		}
 	} else if r.initialState != nil {
 		state = r.initialState()
@@ -262,36 +295,11 @@ func (r *RedisStore[S]) LoadNext(ctx context.Context, machineID string) (Snapsho
 		}
 	}
 
-	if vals[1] != nil {
-		if verStr, ok := vals[1].(string); ok {
-			v, _ := strconv.ParseUint(verStr, 10, 64)
-			version = v
-		}
-	}
-
-	if vals[2] != nil {
-		if seqStr, ok := vals[2].(string); ok {
-			s, _ := strconv.ParseUint(seqStr, 10, 64)
-			lastSeq = s
-		}
-	}
-
-	nextSeq := lastSeq + 1
-	cmdKey := r.commandKey(machineID, nextSeq)
-
-	cmdVals, err := r.client.HMGet(ctx, cmdKey, "data", "status").Result()
-	if err != nil || cmdVals[0] == nil {
-		return Snapshot[S]{}, Command{}, ErrNoPendingCommand
-	}
-
-	statusStr, _ := cmdVals[1].(string)
-	if statusStr != string(StatusPending) {
-		return Snapshot[S]{}, Command{}, ErrNoPendingCommand
-	}
+	version, _ := strconv.ParseUint(verStr, 10, 64)
+	lastSeq, _ := strconv.ParseUint(lastSeqStr, 10, 64)
 
 	var cmd Command
-	dataStr, _ := cmdVals[0].(string)
-	if err := json.Unmarshal([]byte(dataStr), &cmd); err != nil {
+	if err := json.Unmarshal([]byte(cmdDataStr), &cmd); err != nil {
 		return Snapshot[S]{}, Command{}, fmt.Errorf("strand: failed to unmarshal command: %w", err)
 	}
 
