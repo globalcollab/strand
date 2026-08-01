@@ -140,6 +140,22 @@ go outbox.StartWorker(context.Background(), 100*time.Millisecond, 50)
 
 ---
 
+## Performance Benchmarks
+
+Tested on Apple M4 Pro (Go 1.22, Redis 7 Alpine):
+
+| Benchmark Suite | Throughput / Latency | Memory / Allocs |
+| :--- | :--- | :--- |
+| **`MemoryStore_SendAndProcess`** | **~788,840 ops/sec** (1.7 µs/op) | 1.3 KB/op (24 allocs) |
+| **`OutboxProcessor_Throughput`** | **~4,760 items/sec** (209 µs / 50-item batch) | 0.5 KB/op (18 allocs) |
+| **`RedisStore_ConcurrentMultiEntity`** | **~2,050 parallel ops/sec** | 7.7 KB/op (186 allocs) |
+
+```bash
+REDIS_ADDR="127.0.0.1:6379" go test -bench=. -benchmem ./...
+```
+
+---
+
 ## License
 
 Distributed under the MIT License. See `LICENSE` for details.
