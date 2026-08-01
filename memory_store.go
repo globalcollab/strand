@@ -96,13 +96,7 @@ func (m *MemoryStore[S]) AppendCommand(ctx context.Context, machineID string, cm
 }
 
 func cloneState[S any](state S) S {
-	var cloned S
-	bytes, err := json.Marshal(state)
-	if err != nil {
-		return state
-	}
-	_ = json.Unmarshal(bytes, &cloned)
-	return cloned
+	return cloneStatePooled(state)
 }
 
 func (m *MemoryStore[S]) GetSnapshot(ctx context.Context, machineID string) (Snapshot[S], error) {

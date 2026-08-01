@@ -151,7 +151,7 @@ func (r *RedisStore[S]) AppendCommand(ctx context.Context, machineID string, cmd
 		case []byte:
 			payloadRaw = p
 		default:
-			bytes, err := json.Marshal(payload)
+			bytes, err := marshalPooled(payload)
 			if err != nil {
 				return Command{}, fmt.Errorf("strand: failed to marshal payload: %w", err)
 			}
@@ -170,7 +170,7 @@ func (r *RedisStore[S]) AppendCommand(ctx context.Context, machineID string, cmd
 		Attempts:   0,
 	}
 
-	cmdBytes, err := json.Marshal(cmd)
+	cmdBytes, err := marshalPooled(cmd)
 	if err != nil {
 		return Command{}, fmt.Errorf("strand: failed to marshal command struct: %w", err)
 	}
@@ -340,7 +340,7 @@ func (r *RedisStore[S]) Commit(ctx context.Context, req CommitRequest[S]) error 
 		eff.SourceSequence = req.CommandSequence
 		eff.Status = "pending"
 
-		effBytes, _ := json.Marshal(eff)
+		effBytes, _ := marshalPooled(eff)
 		pipe.HSet(ctx, r.outboxKey(), eff.ID, string(effBytes))
 	}
 
@@ -353,7 +353,7 @@ func (r *RedisStore[S]) Commit(ctx context.Context, req CommitRequest[S]) error 
 			if t.Command.MachineID == "" {
 				t.Command.MachineID = req.MachineID
 			}
-			tBytes, _ := json.Marshal(t)
+			tBytes, _ := marshalPooled(t)
 			pipe.HSet(ctx, fmt.Sprintf("%s:timer_meta", r.prefix), timerKey, string(tBytes))
 			pipe.ZAdd(ctx, r.timersKey(), redis.Z{
 				Score:  float64(t.DueAt.UnixNano()),
