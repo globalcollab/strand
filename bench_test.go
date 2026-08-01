@@ -146,3 +146,78 @@ func BenchmarkOutboxProcessor_Throughput(b *testing.B) {
 		_, _ = outbox.ProcessNext(ctx, 50)
 	}
 }
+
+// BenchmarkMultiInstancePodRacing_SingleEntityContention simulates 5 independent worker pods
+// all racing to process commands concurrently on the EXACT SAME entity instance.
+func BenchmarkMultiInstancePodRacing_SingleEntityContention(b *testing.B) {
+	rdb := redis.NewClient(&redis.Options{
+		Addr: "127.0.0.1:6379",
+	})
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		b.Skip("Redis server not available at 127.0.0.1:6379")
+	}
+
+	ctx := context.Background()
+	processor := setupBenchMachine()
+	const numPods = 5
+	engines := make([]*strand.Engine[*BenchState], numPods)
+
+	for i := 0; i < numPods; i++ {
+		store := strand.NewRedisStore[*BenchState](rdb, "bench_pod_racing", func() *BenchState {
+			return &BenchState{Count: 0}
+		})
+		engines[i] = strand.NewEngine[*BenchState](store, processor)
+	}
+
+	sharedEntityID := "shared-pod-racing-entity"
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		podIdx := 0
+		for pb.Next() {
+			engine := engines[podIdx%numPods]
+			podIdx++
+			_, err := engine.Send(ctx, sharedEntityID, "Increment", nil)
+			if err != nil {
+				b.Errorf("Multi-instance pod send error: %v", err)
+			}
+		}
+	})
+}
+
+// BenchmarkMultiInstancePodCluster_100Entities simulates 10 independent worker pods
+// executing commands distributed across 100 entity state machines concurrently.
+func BenchmarkMultiInstancePodCluster_100Entities(b *testing.B) {
+	rdb := redis.NewClient(&redis.Options{
+		Addr: "127.0.0.1:6379",
+	})
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		b.Skip("Redis server not available at 127.0.0.1:6379")
+	}
+
+	ctx := context.Background()
+	processor := setupBenchMachine()
+	const numPods = 10
+	engines := make([]*strand.Engine[*BenchState], numPods)
+
+	for i := 0; i < numPods; i++ {
+		store := strand.NewRedisStore[*BenchState](rdb, "bench_pod_cluster", func() *BenchState {
+			return &BenchState{Count: 0}
+		})
+		engines[i] = strand.NewEngine[*BenchState](store, processor)
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			engine := engines[i%numPods]
+			entityID := fmt.Sprintf("cluster-entity-%d", i%100)
+			i++
+			_, err := engine.Send(ctx, entityID, "Increment", nil)
+			if err != nil {
+				b.Errorf("Multi-instance cluster send error: %v", err)
+			}
+		}
+	})
+}

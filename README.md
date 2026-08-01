@@ -144,11 +144,12 @@ go outbox.StartWorker(context.Background(), 100*time.Millisecond, 50)
 
 Tested on Apple M4 Pro (Go 1.22, Redis 7 Alpine):
 
-| Benchmark Suite | Throughput / Latency | Memory / Allocs |
-| :--- | :--- | :--- |
-| **`MemoryStore_SendAndProcess`** | **~788,840 ops/sec** (1.7 µs/op) | 1.3 KB/op (24 allocs) |
-| **`OutboxProcessor_Throughput`** | **~4,760 items/sec** (209 µs / 50-item batch) | 0.5 KB/op (18 allocs) |
-| **`RedisStore_ConcurrentMultiEntity`** | **~2,050 parallel ops/sec** | 7.7 KB/op (186 allocs) |
+| Benchmark Suite | Scenario / Workload | Throughput | Memory / Allocs |
+| :--- | :--- | :--- | :--- |
+| **`MemoryStore_SendAndProcess`** | Single-pod in-memory state engine | **~788,840 ops/sec** (1.7 µs/op) | 1.3 KB/op (24 allocs) |
+| **`OutboxProcessor_Throughput`** | Asynchronous outbox worker batching | **~4,760 items/sec** (209 µs / 50 batch) | 0.5 KB/op (18 allocs) |
+| **`MultiInstancePodCluster_100Entities`** | **10 Worker Pods** distributed across 100 entities | **~2,070 parallel ops/sec** | 7.3 KB/op (189 allocs) |
+| **`MultiInstancePodRacing_SingleEntityContention`** | **5 Worker Pods** racing on 1 single entity (CAS Contention) | **~800 ops/sec** (Automatic CAS Retries) | 12.5 KB/op (325 allocs) |
 
 ```bash
 REDIS_ADDR="127.0.0.1:6379" go test -bench=. -benchmem ./...
